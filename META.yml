@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               XML-Hash-XS
-version:            0.02
+version:            0.03
 abstract:           Simple and fast hash to XML conversion
 author:
     - Yuriy Ustushenko <yoreek@yahoo.com>
