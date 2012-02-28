@@ -8,7 +8,7 @@ use Scalar::Util qw(openhandle);
 use base 'Exporter';
 our @EXPORT_OK = our @EXPORT = qw( hash2xml );
 
-our $VERSION = '0.03';
+our $VERSION = '0.03_01';
 
 require XSLoader;
 XSLoader::load('XML::Hash::XS', $VERSION);
@@ -26,7 +26,7 @@ sub hash2xml {
     if ( $output eq 'string' ) {
         _hash2xml2string( $hash, @options{qw( root version encoding indent )} );
     }
-    elsif ( my $fh = $output ) {
+    elsif ( my $fh = openhandle($output) ) {
         _hash2xml2fh( $fh, $hash, @options{qw( root version encoding indent )} );
     }
     else {
