@@ -18,6 +18,5 @@ no_index:
     - t
     - inc
 requires:
-  Scalar::Util: 0
   Test::More: 0
-version: 0.05_01
+version: 0.05_02

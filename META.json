@@ -32,11 +32,10 @@
       },
       "runtime" : {
          "requires" : {
-            "Scalar::Util" : 0,
             "Test::More" : 0
          }
       }
    },
    "release_status" : "testing",
-   "version" : "0.05_01"
+   "version" : "0.05_02"
 }
