@@ -1,5 +1,6 @@
 #include "EXTERN.h"
 #include "perl.h"
+#define NO_XSLOCKS
 #include "XSUB.h"
 #include "ppport.h"
 
@@ -16,6 +17,17 @@
 #ifndef MUTABLE_SV
 #define MUTABLE_SV(p)   ((SV *)MUTABLE_PTR(p))
 #endif
+
+#if __GNUC__ >= 3
+# define expect(expr,value)         __builtin_expect ((expr), (value))
+# define INLINE                     static inline
+#else
+# define expect(expr,value)         (expr)
+# define INLINE                     static
+#endif
+
+#define expect_false(expr) expect ((expr) != 0, 0)
+#define expect_true(expr)  expect ((expr) != 0, 1)
 
 #define FLAG_SIMPLE                     1
 #define FLAG_COMPLEX                    2
@@ -42,6 +54,12 @@ typedef struct {
     void *value;
 } hash_entity_t;
 
+typedef struct _stash_entity_t stash_entity_t;
+struct _stash_entity_t {
+    void                   *data;
+    struct _stash_entity_t *next;
+};
+
 typedef struct {
     char              *version;
     char              *encoding;
@@ -52,6 +70,7 @@ typedef struct {
     int                canonical;
     int                use_attr;
     xmlOutputBufferPtr buf;
+    stash_entity_t     stash;
 } convert_ctx_t;
 
 const char indent_string[60] = "                                                            ";
@@ -214,9 +233,39 @@ XMLHash_write_attribute_element(convert_ctx_t *ctx, char *name, xmlChar *value)
 }
 
 void
-XMLHash_resolve_value(convert_ctx_t *ctx, SV **value, SV **value_ref)
+XMLHash_stash_push(stash_entity_t *stash, void *data)
+{
+    stash_entity_t *ent;
+    ent = malloc(sizeof(stash_entity_t));
+    if (ent == NULL)
+        croak("Malloc error");
+
+    ent->data   = data;
+    ent->next   = stash->next;
+    stash->next = ent;
+}
+
+void
+XMLHash_stash_clean(stash_entity_t *stash)
+{
+    stash_entity_t *ent;
+
+    while (stash->next != NULL) {
+        ent = stash->next;
+        SvREFCNT_dec((SV *)ent->data);
+        stash->next = ent->next;
+        free(ent);
+    }
+}
+
+void
+XMLHash_resolve_value(convert_ctx_t *ctx, SV **value, SV **value_ref, int *raw)
 {
     int count;
+    svtype svt;
+    SV *sv;
+
+    *raw = 0;
 
     while ( *value && SvROK(*value) ) {
         if (++ctx->recursion_depth > MAX_RECURSION_DEPTH)
@@ -224,9 +273,44 @@ XMLHash_resolve_value(convert_ctx_t *ctx, SV **value, SV **value_ref)
 
         *value_ref = *value;
         *value     = SvRV(*value);
+        sv         = *value;
 
-        if(SvTYPE(*value) == SVt_PVCV) {
+        if (expect_false( SvOBJECT(sv) )) {
+            /* object */
+            GV *to_string = gv_fetchmethod_autoload (SvSTASH (sv), "toString", 0);
+            if (to_string) {
+                dSP;
+
+                ENTER; SAVETMPS; PUSHMARK (SP);
+                XPUSHs (sv_bless (sv_2mortal (newRV_inc (sv)), SvSTASH (sv)));
+
+                // calling with G_SCALAR ensures that we always get a 1 return value
+                PUTBACK;
+                call_sv ((SV *)GvCV (to_string), G_SCALAR);
+                SPAGAIN;
+
+                // catch this surprisingly common error
+                if (SvROK (TOPs) && SvRV (TOPs) == sv)
+                    croak("%s::toString method returned same object as was passed instead of a new one", HvNAME (SvSTASH (sv)));
+
+                *value = POPs;
+                PUTBACK;
+
+                SvREFCNT_inc(*value);
+
+                XMLHash_stash_push(&ctx->stash, *value);
+
+                FREETMPS; LEAVE;
+
+                *raw = 1;
+
+                continue;
+            }
+        }
+        else if(SvTYPE(*value) == SVt_PVCV) {
             /* code ref */
+            *raw = 0;
+
             dSP;
 
             ENTER;
@@ -239,6 +323,8 @@ XMLHash_resolve_value(convert_ctx_t *ctx, SV **value, SV **value_ref)
                 *value = POPs;
 
                 SvREFCNT_inc(*value);
+
+                XMLHash_stash_push(&ctx->stash, *value);
 
                 PUTBACK;
 
@@ -253,8 +339,6 @@ XMLHash_resolve_value(convert_ctx_t *ctx, SV **value, SV **value_ref)
         }
     }
 }
-
-
 
 void
 XMLHash_write_hash_no_attr(convert_ctx_t *ctx, char *name, SV *hash)
@@ -318,10 +402,10 @@ void
 XMLHash_write_item_no_attr(convert_ctx_t *ctx, char *name, SV *value)
 {
     I32        i, len;
-    int        count;
+    int        count, raw;
     SV        *value_ref;
 
-    XMLHash_resolve_value(ctx, &value, &value_ref);
+    XMLHash_resolve_value(ctx, &value, &value_ref, &raw);
 
     switch (SvTYPE(value)) {
         case SVt_NULL:
@@ -334,7 +418,12 @@ XMLHash_write_item_no_attr(convert_ctx_t *ctx, char *name, SV *value)
         case SVt_PV:
             /* integer, double, scalar */
             XMLHash_write_tag(ctx, TAG_OPEN, name, ctx->indent, 0);
-            BUFFER_WRITE_ESCAPE(SvPV_nolen(value));
+            if (raw) {
+                BUFFER_WRITE_STRING(SvPV_nolen(value));
+            }
+            else {
+                BUFFER_WRITE_ESCAPE(SvPV_nolen(value));
+            }
             XMLHash_write_tag(ctx, TAG_CLOSE, name, 0, ctx->indent);
             break;
         case SVt_PVAV:
@@ -352,7 +441,12 @@ XMLHash_write_item_no_attr(convert_ctx_t *ctx, char *name, SV *value)
             /* blessed */
             if (SvOK(value)) {
                 XMLHash_write_tag(ctx, TAG_OPEN, name, ctx->indent, 0);
-                BUFFER_WRITE_ESCAPE(SvPV_nolen(value));
+                if (raw) {
+                    BUFFER_WRITE_STRING(SvPV_nolen(value));
+                }
+                else {
+                    BUFFER_WRITE_ESCAPE(SvPV_nolen(value));
+                }
                 XMLHash_write_tag(ctx, TAG_CLOSE, name, 0, ctx->indent);
                 break;
             }
@@ -363,17 +457,14 @@ XMLHash_write_item_no_attr(convert_ctx_t *ctx, char *name, SV *value)
     ctx->recursion_depth--;
 }
 
-
-
-
 int
 XMLHash_write_item(convert_ctx_t *ctx, char *name, SV *value, int flag)
 {
-    int        count = 0;
+    int        count = 0, raw;
     I32        len, i;
     SV        *value_ref;
 
-    XMLHash_resolve_value(ctx, &value, &value_ref);
+    XMLHash_resolve_value(ctx, &value, &value_ref, &raw);
 
     switch (SvTYPE(value)) {
         case SVt_NULL:
@@ -442,8 +533,6 @@ XMLHash_write_item(convert_ctx_t *ctx, char *name, SV *value, int flag)
 
     return count;
 }
-
-
 
 void
 XMLHash_write_hash(convert_ctx_t *ctx, char *name, SV *hash)
@@ -551,7 +640,6 @@ XMLHash_write_hash(convert_ctx_t *ctx, char *name, SV *hash)
     }
 }
 
-
 void
 XMLHash_hash2xml(convert_ctx_t *ctx, SV *hash)
 {
@@ -562,12 +650,25 @@ XMLHash_hash2xml(convert_ctx_t *ctx, SV *hash)
     BUFFER_WRITE_QUOTED(ctx->encoding);
     BUFFER_WRITE_CONSTANT("?>\n");
 
-    if (ctx->use_attr) {
-        XMLHash_write_hash(ctx, ctx->root, hash);
+    dXCPT;
+
+    XCPT_TRY_START {
+        if (ctx->use_attr) {
+            XMLHash_write_hash(ctx, ctx->root, hash);
+        }
+        else {
+            XMLHash_write_hash_no_attr(ctx, ctx->root, hash);
+        }
+        XMLHash_stash_clean(&ctx->stash);
+    } XCPT_TRY_END
+
+    XCPT_CATCH
+    {
+        XMLHash_stash_clean(&ctx->stash);
+        xmlOutputBufferClose(ctx->buf);
+        XCPT_RETHROW;
     }
-    else {
-        XMLHash_write_hash_no_attr(ctx, ctx->root, hash);
-    }
+
 }
 
 MODULE = XML::Hash::XS PACKAGE = XML::Hash::XS
@@ -591,12 +692,12 @@ _hash2xml2string(hash, root, version, encoding, indent, canonical, use_attr)
     CODE:
         RETVAL = &PL_sv_undef;
 
+        memset(&ctx, 0, sizeof(convert_ctx_t));
+
         ctx.root            = root;
         ctx.version         = version;
         ctx.encoding        = encoding;
-        ctx.recursion_depth = 0;
         ctx.indent          = indent;
-        ctx.indent_count    = 0;
         ctx.canonical       = canonical;
         ctx.use_attr        = use_attr;
 
@@ -658,12 +759,12 @@ _hash2xml2fh(fh, hash, root, version, encoding, indent, canonical, use_attr)
         IO                        *io = GvIO(gv);
         convert_ctx_t              ctx;
     CODE:
+        memset(&ctx, 0, sizeof(convert_ctx_t));
+
         ctx.root            = root;
         ctx.version         = version;
         ctx.encoding        = encoding;
-        ctx.recursion_depth = 0;
         ctx.indent          = indent;
-        ctx.indent_count    = 0;
         ctx.canonical       = canonical;
         ctx.use_attr        = use_attr;
 
