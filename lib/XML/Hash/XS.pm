@@ -8,7 +8,7 @@ use warnings;
 use base 'Exporter';
 our @EXPORT_OK = our @EXPORT = qw( hash2xml );
 
-our $VERSION = '0.12';
+our $VERSION = '0.12_01';
 
 require XSLoader;
 XSLoader::load('XML::Hash::XS', $VERSION);
@@ -147,6 +147,17 @@ will convert to:
       <node5 node51="value51"/>
     </root>
 
+
+Compose benchmark:
+
+                   Rate        Hash    Hash::LX      Simple Hash::XS(LX)    Hash::XS
+    Hash         43.7/s          --        -12%        -38%         -98%        -98%
+    Hash::LX     49.6/s         14%          --        -30%         -97%        -98%
+    Simple       70.9/s         62%         43%          --         -96%        -96%
+    Hash::XS(LX) 1786/s       3986%       3498%       2420%           --        -11%
+    Hash::XS     2000/s       4476%       3930%       2722%          12%          --
+
+Benchmark was done on L<http://search.cpan.org/uploads.rdf>
 
 =head1 OPTIONS
 
