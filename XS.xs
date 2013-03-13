@@ -132,7 +132,6 @@ typedef enum {
 
 struct _conv_opts_t {
     convMethodType            method;
-    xmlCharEncodingHandlerPtr encoding_handler;
 
     /* native options */
     char               version[CONV_STR_PARAM_LEN];
@@ -1116,10 +1115,6 @@ XMLHash_conv_init_options(conv_opts_t *opts)
     /* output, NULL - to string */
     CONV_READ_REF_PARAM   (opts->output,    "XML::Hash::XS::output",    CONV_DEF_OUTPUT);
 
-    opts->encoding_handler = xmlFindCharEncodingHandler(opts->encoding);
-    if (opts->encoding_handler == NULL)
-        croak("Unknown encoding '%s'", opts->encoding);
-
     return TRUE;
 }
 
@@ -1218,10 +1213,6 @@ XMLHash_conv_parse_param(conv_opts_t *opts, int first, I32 ax, I32 items)
         }
         else if (strcmp(p, "encoding") == 0) {
             XMLHash_conv_assign_string_param(opts->encoding, v);
-            opts->encoding_handler = xmlFindCharEncodingHandler(opts->encoding);
-            if (opts->encoding_handler == NULL) {
-                croak("Unknown encoding '%s'", opts->encoding);
-            }
         }
         else if (strcmp(p, "content") == 0) {
             XMLHash_conv_assign_string_param(opts->content, v);
@@ -1285,9 +1276,15 @@ XMLHash_conv_parse_param(conv_opts_t *opts, int first, I32 ax, I32 items)
 void
 XMLHash_conv_create_buffer(convert_ctx_t *ctx)
 {
+    xmlCharEncodingHandlerPtr encoding_handler;
+
+    encoding_handler = xmlFindCharEncodingHandler(ctx->opts.encoding);
+    if ( encoding_handler == NULL )
+        croak("Unknown encoding");
+
     if (ctx->opts.output == NULL) {
         /* output to string */
-        ctx->buf = xmlAllocOutputBuffer(ctx->opts.encoding_handler);
+        ctx->buf = xmlAllocOutputBuffer(encoding_handler);
     }
     else {
         MAGIC  *mg;
@@ -1305,7 +1302,7 @@ XMLHash_conv_create_buffer(convert_ctx_t *ctx)
             ctx->buf = xmlOutputBufferCreateIO(
                 (xmlOutputWriteCallback) &XMLHash_write_tied_handler,
                 (xmlOutputCloseCallback) &XMLHash_close_handler,
-                obj, ctx->opts.encoding_handler
+                obj, encoding_handler
             );
         }
         else {
@@ -1315,7 +1312,7 @@ XMLHash_conv_create_buffer(convert_ctx_t *ctx)
             ctx->buf = xmlOutputBufferCreateIO(
                 (xmlOutputWriteCallback) &XMLHash_write_handler,
                 (xmlOutputCloseCallback) &XMLHash_close_handler,
-                fp, ctx->opts.encoding_handler
+                fp, encoding_handler
             );
         }
     }
@@ -1383,30 +1380,17 @@ XMLHash_hash2xml(convert_ctx_t *ctx, SV *hash)
         BUFFER_WRITE_CONSTANT("?>\n");
     }
 
-    dXCPT;
-
-    XCPT_TRY_START {
-        if (ctx->opts.method == CONV_METHOD_NATIVE) {
-            ctx->opts.trim = 0;
-            XMLHash_write_hash_no_attr(ctx, ctx->opts.root, hash);
-        }
-        else if (ctx->opts.method == CONV_METHOD_NATIVE_ATTR_MODE) {
-            ctx->opts.trim = 0;
-            XMLHash_write_hash(ctx, ctx->opts.root, hash);
-        }
-        else if (ctx->opts.method == CONV_METHOD_LX) {
-            XMLHash_write_hash_lx(ctx, hash, 0);
-        }
-        XMLHash_stash_clean(&ctx->stash);
-    } XCPT_TRY_END
-
-    XCPT_CATCH
-    {
-        XMLHash_stash_clean(&ctx->stash);
-        XMLHash_conv_destroy_buffer(ctx, NULL, NULL);
-        XCPT_RETHROW;
+    if (ctx->opts.method == CONV_METHOD_NATIVE) {
+        ctx->opts.trim = 0;
+        XMLHash_write_hash_no_attr(ctx, ctx->opts.root, hash);
     }
-
+    else if (ctx->opts.method == CONV_METHOD_NATIVE_ATTR_MODE) {
+        ctx->opts.trim = 0;
+        XMLHash_write_hash(ctx, ctx->opts.root, hash);
+    }
+    else if (ctx->opts.method == CONV_METHOD_LX) {
+        XMLHash_write_hash_lx(ctx, hash, 0);
+    }
 }
 
 MODULE = XML::Hash::XS PACKAGE = XML::Hash::XS
