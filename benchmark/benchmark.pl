@@ -28,6 +28,7 @@ cmpthese timethese 1000, {
 	},
 	'Hash::XS' => sub {
 		my $oxml = XML::Hash::XS::hash2xml($xs_hash);
+        #print $oxml;
 	},
 	'Hash::XS(OOP)' => sub {
 		my $oxml = $xs_conv->hash2xml($xs_hash);
