@@ -6,6 +6,7 @@ use LWP::Simple 'get';
 use XML::Hash::LX;
 use XML::Hash;
 use XML::Simple;
+use XML::LibXML;
 use XML::Hash::XS qw();
 use Benchmark qw(:all);
 
@@ -28,10 +29,12 @@ cmpthese timethese 1000, {
 	},
 	'Hash::XS' => sub {
 		my $oxml = XML::Hash::XS::hash2xml($xs_hash);
-        #print $oxml;
 	},
 	'Hash::XS(OOP)' => sub {
 		my $oxml = $xs_conv->hash2xml($xs_hash);
+	},
+	'Hash::XS(OOP to DOM)' => sub {
+		my $oxml = $xs_conv->hash2xml($xs_hash, doc => 1);
 	},
 	'Hash::XS(LX)' => sub {
 		my $oxml = XML::Hash::XS::hash2xml($lx_hash, method => 'LX');
