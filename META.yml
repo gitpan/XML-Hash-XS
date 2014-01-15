@@ -19,6 +19,5 @@ no_index:
     - inc
 requires:
   Test::More: 0
-  XML::LibXML: 1.62
   perl: 5.008008
-version: 0.21
+version: 0.23

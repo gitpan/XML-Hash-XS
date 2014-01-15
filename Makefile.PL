@@ -38,8 +38,14 @@ our @COMMON_INC_PATH = (
 
 our @REQUIRED_LIBS = (
     {
+        perl      => 1,
+        name      => 'XML::LibXML',
+        version   => 1.62,
+        mandatory => 0,
+    },
+    {
         name      => 'xml2',
-        mandatory => 1,
+        mandatory => 0,
         configs   => [
             {
                 lib     => sub {
@@ -66,7 +72,7 @@ our @REQUIRED_LIBS = (
                 header  => 'libxml/parser.h',
             },
             {
-                lib => 'xml2 m z',
+                lib     => 'xml2 m z',
                 libpath => \@COMMON_LIB_PATH,
                 incpath => [
                     @COMMON_INC_PATH,
@@ -142,10 +148,12 @@ WriteMakefile(
     LICENSE          => "perl",
     MIN_PERL_VERSION => 5.008008,
     PREREQ_PM        => {
-        'XML::LibXML'  => 1.62,
         'Test::More'   => 0,
     },
-    OBJECT           => 'XS.o xmlhash_writer.o xmlhash_converter.o xmlhash_converter_doc.o',
+    OBJECT           => join(' ', '$(BASEEXT)$(OBJ_EXT)', map { s/\.c$/\$(OBJ_EXT)/; $_ } glob('src/*.c')),
+    C                => [ 'XS.c', glob('src/*.c') ],
+    H                => [ glob('src/*.h') ],
+    clean            => { FILES => 'src/*.o' },
     get_config(),
 );
 
@@ -162,6 +170,9 @@ sub generate_config {
 
     my (%config, %summary_config);
     my @options = qw(lib libpath incpath);
+
+    # remove unneded libxml2
+    delete $LIBS_AVAILABLE{xml2} unless exists $LIBS_AVAILABLE{'XML::LibXML'};
 
     foreach my $lib_config (values %LIBS_AVAILABLE) {
         foreach my $option (@options) {
@@ -194,11 +205,16 @@ sub generate_config {
         $summary_config{INC} = \@inc if scalar @inc;
     }
 
-    my @define = map { "-DXMLHASH_HAVE_" . uc($_) } keys %LIBS_AVAILABLE;
+    my @define = map { s/:/_/g; "-DXH_HAVE_" . uc($_) } keys %LIBS_AVAILABLE;
     $summary_config{DEFINE} = \@define if scalar @define;
 
     # convert array to string
     $summary_config{$_} = join(' ', @{ $summary_config{$_} }) for keys %summary_config;
+
+    # CCFLAGS
+    $summary_config{CCFLAGS}  = '-o $@';
+    $summary_config{CCFLAGS} .= ' -g -Wall -Werror -pedantic -std=c99 -DPERL_GCC_PEDANTIC -O0'
+        if $DEBUG;
 
     return %summary_config;
 }
@@ -207,40 +223,56 @@ sub check_libs {
     my @options = qw(lib libpath incpath header function);
     foreach my $info (@REQUIRED_LIBS) {
         my $lib = $info->{name};
-        foreach my $lib_config (@{ $info->{configs} }) {
-            my %config;
 
-            @config{@options} = map {
-                my $results = $lib_config->{$_};
-                $results = ($results and ref($results) eq 'CODE') ? &$results() : $results;
-                ($results and $_ ne 'function' and !ref($results))
-                    ? [ split(/\s+/, $results) ]
-                    : $results
-                ;
-            } @options;
-
-            next unless $config{lib};
-
+        if ( $info->{perl} ) {
+            my $ver = $info->{version} || '';
             print "Checking for '$lib'... ";
-
-            delete $config{$_} for grep { !$config{$_} } keys %config;
-            if ( $PARAMS{LIBS} ) {
-                delete $config{lib};
-                delete $config{libpath};
-                $config{LIBS} = $PARAMS{LIBS};
+            eval "use $lib $ver";
+            if (my $err = $@) {
+                print "no\n";
+                print $err if $DEBUG
             }
-            if ( $PARAMS{INC} ) {
-                delete $config{incpath};
-                $config{INC} = $PARAMS{INC};
-            }
-
-            if ( check_lib(debug => $DEBUG, %config) ) {
+            else {
                 print "yes\n";
-                $LIBS_AVAILABLE{$lib} = \%config;
-                last;
+                $LIBS_AVAILABLE{$lib} = {};
             }
+        }
+        else {
+            foreach my $lib_config (@{ $info->{configs} }) {
+                my %config;
 
-            print "no\n";
+                @config{@options} = map {
+                    my $results = $lib_config->{$_};
+                    $results = ($results and ref($results) eq 'CODE') ? &$results() : $results;
+                    ($results and $_ ne 'function' and !ref($results))
+                        ? [ split(/\s+/, $results) ]
+                        : $results
+                    ;
+                } @options;
+
+                next unless $config{lib} || $config{perl_lib};
+
+                print "Checking for '$lib'... ";
+
+                delete $config{$_} for grep { !$config{$_} } keys %config;
+                if ( $PARAMS{LIBS} ) {
+                    delete $config{lib};
+                    delete $config{libpath};
+                    $config{LIBS} = $PARAMS{LIBS};
+                }
+                if ( $PARAMS{INC} ) {
+                    delete $config{incpath};
+                    $config{INC} = $PARAMS{INC};
+                }
+
+                if ( check_lib(debug => $DEBUG, %config) ) {
+                    print "yes\n";
+                    $LIBS_AVAILABLE{$lib} = \%config;
+                    last;
+                }
+
+                print "no\n";
+            }
         }
 
         if ($info->{mandatory} && !$LIBS_AVAILABLE{$lib}) {
