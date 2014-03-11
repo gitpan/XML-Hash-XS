@@ -1,5 +1,5 @@
 ---
-abstract: 'Simple and fast hash to XML conversion'
+abstract: 'Simple and fast hash to XML conversion written in C'
 author:
   - 'Yuriy Ustushenko <yoreek@yahoo.com>'
 build_requires:
@@ -20,4 +20,4 @@ no_index:
 requires:
   Test::More: 0
   perl: 5.008008
-version: 0.24
+version: 0.25
